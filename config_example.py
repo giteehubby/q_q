@@ -13,6 +13,7 @@ MODEL_NAME = "gpt-3.5-turbo"
 # 机器人设置
 MAX_MESSAGE_LENGTH = 2000  # 最大回复长度
 RESPONSE_TIMEOUT = 30  # API超时时间（秒）
+CONTEXT_HISTORY_LENGTH = 5  # 上下文历史消息数量
 
 # 日志设置
 LOG_LEVEL = "INFO" 

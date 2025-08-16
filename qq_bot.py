@@ -6,6 +6,7 @@ import openai
 from loguru import logger
 import sys
 import traceback
+import collections
 
 # 导入配置
 try:
@@ -25,13 +26,18 @@ openai_client = openai.OpenAI(
 )
 
 class MyClient(botpy.Client):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # 使用defaultdict为每个群组创建一个固定长度的对话历史队列
+        self.group_message_history = collections.defaultdict(lambda: collections.deque(maxlen=20))
+
     async def on_ready(self):
         logger.info(f"机器人 {self.robot.name} 已启动!")
 
     async def on_group_at_message_create(self, message: GroupMessage):
         """处理群聊@消息"""
         try:
-            # 获取消息内容，去除@机器人的部分
+            # 获取消息内容
             content = message.content.strip()
             logger.info(f"收到群聊@消息: {content}")
             
@@ -40,18 +46,34 @@ class MyClient(botpy.Client):
                 await self._send_help_message(message)
                 return
             
-            # 移除@机器人的标记
+            # 移除@机器人的标记，检查消息是否为空
             clean_content = content.replace(f"<@!{self.robot.id}>", "").strip()
-            
             if not clean_content:
                 await self._send_help_message(message)
                 return
+
+            # 记录对话历史
+            group_id = message.group_openid
+            display_content = content.replace(f"<@!{self.robot.id}>", f"@{self.robot.name}")
+
+            self.group_message_history[group_id].append({"role": "user", "content": display_content})
             
+            # 构建带历史记录的对话消息
+            messages = [
+                {
+                    "role": "system", 
+                    "content": self._get_system_prompt()
+                }
+            ]
+            messages.extend(list(self.group_message_history[group_id]))
+
             # 调用大模型API
-            response = await self._call_ai_api(clean_content)
+            response = await self._call_ai_api(messages)
             
-            # 发送回复
+            # 发送回复并记录
             if response:
+                if response != "回复超时，请稍后再试。":
+                    self.group_message_history[group_id].append({"role": "assistant", "content": response})
                 await self._send_reply(message, response)
             else:
                 await self._send_reply(message, "抱歉，我现在无法回复，请稍后再试。")
@@ -71,8 +93,14 @@ class MyClient(botpy.Client):
                 await self._send_help_message_c2c(message)
                 return
             
+            # 为私聊构建对话消息
+            messages = [
+                {"role": "system", "content": self._get_system_prompt()},
+                {"role": "user", "content": content}
+            ]
+            
             # 调用大模型API
-            response = await self._call_ai_api(content)
+            response = await self._call_ai_api(messages)
             
             # 发送回复
             if response:
@@ -85,22 +113,10 @@ class MyClient(botpy.Client):
             logger.error(traceback.format_exc())
             await self._send_reply_c2c(message, "出现了一些问题，请稍后再试。")
 
-    async def _call_ai_api(self, user_message: str) -> str:
+    async def _call_ai_api(self, messages: list) -> str:
         """调用大模型API"""
         try:
-            logger.info(f"调用AI API，用户消息: {user_message}")
-            
-            # 构建对话消息
-            messages = [
-                {
-                    "role": "system", 
-                    "content": self._get_system_prompt()
-                },
-                {
-                    "role": "user", 
-                    "content": user_message
-                }
-            ]
+            logger.info(f"调用AI API...")
             
             # 调用OpenAI API
             response = await asyncio.wait_for(
